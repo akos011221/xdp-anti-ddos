@@ -2,10 +2,7 @@
 !*/
 !*.*
 
-*.o
-*.ll
-*.bc
-*.tmp
+bpf/*.o
 
 /bin/
 /dist/

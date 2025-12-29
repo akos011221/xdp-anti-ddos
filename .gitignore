@@ -1,0 +1,17 @@
+*
+!*/
+!*.*
+
+*.o
+*.ll
+*.bc
+*.tmp
+
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+**/.DS_Store
+.DS_Store

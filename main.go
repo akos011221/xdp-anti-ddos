@@ -149,7 +149,7 @@ func main() {
 			switch reasonCode {
 			case 1:
 				reason = REASON_BLOCKLIST
-			case 2:
+			case 3:
 				reason = REASON_RATE_LIMITED
 			default:
 				reason = "unknown"

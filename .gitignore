@@ -3,6 +3,7 @@
 !*.*
 
 bpf/*.o
+*.o
 
 /bin/
 /dist/

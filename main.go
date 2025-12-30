@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -18,20 +17,14 @@ import (
 )
 
 const (
-	bpfObjectFilePath string = "./bpf/xdp_anti_ddos.bpf.o"
-	programName       string = "xdp_anti_ddos"
-	blockedMapName    string = "blocked_ipv4"
-	eventsMapName     string = "events"
-)
+	BPF_OBJECT_FILE_PATH string = "./xdp_anti_ddos.bpf.o"
+	PROGRAM_NAME         string = "xdp_anti_ddos"
+	BLOCKED_MAP_NAME     string = "blocked_ipv4"
+	EVENTS_MAP_NAME      string = "events"
 
-type DropEvent struct {
-	TsNs     uint64
-	ScrIP    uint32
-	DstPort  uint16
-	Reason   uint8
-	TcpFlags uint8
-	_        uint16 // Padding.
-}
+	REASON_BLOCKLIST    string = "blocklist"
+	REASON_RATE_LIMITED string = "rate_limited"
+)
 
 func ipToU32(ip net.IP) (uint32, error) {
 	ip4 := ip.To4()
@@ -59,7 +52,7 @@ func main() {
 	}
 
 	// Load the compiled BPF object file.
-	spec, err := ebpf.LoadCollectionSpec(bpfObjectFilePath)
+	spec, err := ebpf.LoadCollectionSpec(BPF_OBJECT_FILE_PATH)
 	if err != nil {
 		log.Fatalf("LoadCollectionSpec: %v", err)
 	}
@@ -71,19 +64,19 @@ func main() {
 	}
 	defer coll.Close()
 
-	prog := coll.Programs[programName]
+	prog := coll.Programs[PROGRAM_NAME]
 	if prog == nil {
-		log.Fatalf("program %s not found", programName)
+		log.Fatalf("program %s not found", PROGRAM_NAME)
 	}
 
-	blockedMap := coll.Maps[blockedMapName]
+	blockedMap := coll.Maps[BLOCKED_MAP_NAME]
 	if blockedMap == nil {
-		log.Fatalf("map %s not found", blockedMapName)
+		log.Fatalf("map %s not found", BLOCKED_MAP_NAME)
 	}
 
-	eventsMap := coll.Maps[eventsMapName]
+	eventsMap := coll.Maps[EVENTS_MAP_NAME]
 	if eventsMap == nil {
-		log.Fatalf("map %s not found", eventsMapName)
+		log.Fatalf("map %s not found", EVENTS_MAP_NAME)
 	}
 
 	// Attach XDP program.
@@ -136,19 +129,34 @@ func main() {
 				continue
 			}
 
-			var e DropEvent
-			// ringbuf payload is raw bytes.
-			// In BPF, the struct fields are stored in native endianess of the CPU.
-			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &e); err != nil {
-				log.Printf("decode event: %v", err)
+			// Event decoding in a safe way, manually.
+			raw := record.RawSample
+			if len(raw) != 16 {
+				log.Printf("bad event size: %d", len(raw))
 				continue
 			}
+			ts := binary.LittleEndian.Uint64(raw[0:8])
+			srcIPHost := binary.LittleEndian.Uint32(raw[8:12])
+			dstPort := binary.LittleEndian.Uint16(raw[12:14])
+			reasonCode := raw[14]
+			flags := raw[15]
 
-			srcIP := make(net.IP, 4)
-			binary.BigEndian.PutUint32(srcIP, e.ScrIP)
+			ipBytes := make([]byte, 4)
+			binary.BigEndian.PutUint32(ipBytes, srcIPHost)
+			srcIP := net.IP(ipBytes)
+
+			var reason string
+			switch reasonCode {
+			case 1:
+				reason = REASON_BLOCKLIST
+			case 2:
+				reason = REASON_RATE_LIMITED
+			default:
+				reason = "unknown"
+			}
 
 			log.Printf("DROP src=%s dstPort=%d reason=%d flags=0x%x ts=%d",
-				srcIP.String(), e.DstPort, e.Reason, e.TcpFlags, e.TsNs)
+				srcIP.String(), dstPort, reason, flags, ts)
 		}
 	}()
 

@@ -5,6 +5,9 @@
 #define ETH_P_IP    0x0800
 #define IPPROTO_TCP 6
 
+#define REASON_BLOCKLIST  1
+#define REASON_AUTOBLOCK  3
+
 // BPF map for Blocklist
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -29,7 +32,17 @@ struct drop_event {
 };
 // 16 bytes total.
 
-#define REASON_BLOCKLIST  1
+struct syn_state {
+    __u64 window_start_ns;
+    __u32 count;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 262144); // number of tracked IPs
+    __type(key, __u32); // source IP (host order)
+    __type(value, struct syn_state);
+} syn_rate SEC(".maps");
 
 static __always_inline void emit_event(__u32 src_ip, __u16 dst_port, __u8 reason, __u8 tcp_flags)
 {
@@ -126,6 +139,42 @@ int xdp_anti_ddos(struct xdp_md *ctx)
 
     if (!(is_syn && !is_ack)) {
         return XDP_PASS;
+    }
+
+    __u64 now = bpf_ktime_get_ns();
+    
+    struct syn_state *st = bpf_map_lookup_elem(&syn_rate, &src_ip);
+
+    if (!st) {
+        // Seeing this IP for the first time.
+        struct syn_state new = {
+            .window_start_ns = now,
+            .count = 1,
+        };
+        bpf_map_update_elem(&syn_rate, &src_ip, &new, BPF_ANY);
+
+    } else {
+        if (now - st->window_start_ns > 1000000000ULL) {
+            // Window expired. Start a new 1s window.
+            st->window_start_ns = now;
+            st->count = 1;
+        } else {
+            // Still within the same window. Increment count.
+            st->count++;
+
+            // Treshold is 200 SYN per second.
+            if (st->count > 200) {
+                // Value for the blocklist map update.
+                __u8 one = 1;
+                
+                bpf_map_update_elem(&blocked_ipv4, &src_ip, &one, BPF_ANY);
+                // TODO: investigate whether this event should be removed 
+                // to avoid overwhelming ringbuf under flood.
+                emit_event(src_ip, dst_port, REASON_AUTOBLOCK, 0);
+
+                return XDP_DROP;
+            }
+        }
     }
 
     __u8 *blocked = bpf_map_lookup_elem(&blocked_ipv4, &src_ip);

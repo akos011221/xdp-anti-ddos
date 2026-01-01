@@ -4,19 +4,6 @@ Protect against TCP SYN exhaustion in the NIC driver path by dropping malicious 
 
 ![Architecture](./images/architecture.drawio.svg)
 
-## Why?
-
-xdp-syn-filter does SYN flood detection and mitigation in the Linux kernel dataplane, before skb allocation, conntrack, netfilter and sockets. This way expensive allocations can be avoided, SYN flooding can be mitigated with very low resource consumption.
-
-## Features
-
-- All drops happen in XDP without involving the network stack
-- Quarantine is time-bounded, expires after TTL
-- Stateless program, no external dependencies required
-- Minimal telemetry, per-CPU counters are used
-- Attacker-controlled maps are LRU-bounded
-- Perfect for anycast nodes
-
 ## Data Flow
 
 1. NIC receives packet

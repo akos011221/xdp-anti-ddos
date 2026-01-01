@@ -3,7 +3,9 @@
 !*.*
 
 bpf/*.o
+bpf/*.h
 *.o
+*.h
 
 /bin/
 /dist/

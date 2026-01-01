@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	BPF_OBJECT_FILE_PATH string = "./xdp_anti_ddos.bpf.o"
-	PROGRAM_NAME         string = "xdp_anti_ddos"
+	BPF_OBJECT_FILE_PATH string = "./xdp_syn_filter.bpf.o"
+	PROGRAM_NAME         string = "xdp_syn_filter"
 	EVENTS_MAP_NAME      string = "events"
 	STATS_MAP_NAME       string = "stats_map"
 )

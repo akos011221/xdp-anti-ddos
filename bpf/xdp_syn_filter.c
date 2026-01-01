@@ -115,7 +115,7 @@ struct
     XDP entry point.
 */
 SEC("xdp")
-int xdp_anti_ddos(struct xdp_md *ctx)
+int xdp_syn_filter(struct xdp_md *ctx)
 {
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;

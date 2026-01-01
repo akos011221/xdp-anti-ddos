@@ -31,14 +31,6 @@ xdp-syn-filter does SYN flood detection and mitigation in the Linux kernel datap
    - Drop packet
 5. Per-CPU counters updated for observability
 
-## Performance Characteristics
-
-- **Enforcement latency**: sub-microsecond
-- **Packet drops**: pre-skb
-- **Contention**: zero, each CPU has its own counters
-- **Memory growth**: bounded due to LRU maps
-- **Self-recovery**: yes (TTL expiry)
-
 ## Build
 
 ```bash
@@ -51,14 +43,3 @@ make caps
 ```bash
 sudo ./xdp-syn-filter <iface>
 ```
-
-## Roadmap
-
-Planned for future releases:
-
-- CIDR / subnet quarantine
-- Bloom filter prefilter
-- Hardware XDP offload
-- Adaptive thresholds
-- IPv6 support
-- WireGuard sinkhole tunnels

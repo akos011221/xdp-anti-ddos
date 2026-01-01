@@ -21,10 +21,21 @@ const (
 	PROGRAM_NAME         string = "xdp_anti_ddos"
 	BLOCKED_MAP_NAME     string = "blocked_ipv4"
 	EVENTS_MAP_NAME      string = "events"
+	STATS_MAP_NAME       string = "stats_map"
 
 	REASON_BLOCKLIST    string = "blocklist"
 	REASON_RATE_LIMITED string = "rate_limited"
 )
+
+type Stats struct {
+	PktsTotal        uint64
+	PktsIPv4         uint64
+	PktsTCP          uint64
+	PktsSYN          uint64
+	DropBlocklist    uint64
+	DropAutoblock    uint64
+	AutoblockActions uint64
+}
 
 func ipToU32(ip net.IP) (uint32, error) {
 	ip4 := ip.To4()
@@ -77,6 +88,11 @@ func main() {
 	eventsMap := coll.Maps[EVENTS_MAP_NAME]
 	if eventsMap == nil {
 		log.Fatalf("map %s not found", EVENTS_MAP_NAME)
+	}
+
+	statsMap := coll.Maps[STATS_MAP_NAME]
+	if statsMap == nil {
+		log.Fatalf("map %s not found", STATS_MAP_NAME)
 	}
 
 	// Attach XDP program.
@@ -155,8 +171,53 @@ func main() {
 				reason = "unknown"
 			}
 
-			log.Printf("DROP src=%s dstPort=%d reason=%d flags=0x%x ts=%d",
+			log.Printf("DROP src=%s dstPort=%d reason=%s flags=0x%x ts=%d",
 				srcIP.String(), dstPort, reason, flags, ts)
+		}
+	}()
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		var prev Stats
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// PERCPU_ARRAY has a single key (0)
+				var key uint32 = 0
+				var perCPU []Stats
+				if err := statsMap.Lookup(key, &perCPU); err != nil {
+					log.Printf("statsMap.Lookup: %v", err)
+					continue
+				}
+
+				// Sum across CPUs
+				var cur Stats
+				for _, s := range perCPU {
+					cur.PktsTotal += s.PktsTotal
+					cur.PktsIPv4 += s.PktsIPv4
+					cur.PktsTCP += s.PktsTCP
+					cur.PktsSYN += s.PktsSYN
+					cur.DropBlocklist += s.DropBlocklist
+					cur.DropAutoblock += s.DropAutoblock
+					cur.AutoblockActions += s.AutoblockActions
+				}
+
+				// Compute deltas per second
+				dTotal := cur.PktsTotal - prev.PktsTotal
+				dSyn := cur.PktsSYN - prev.PktsSYN
+				dDropBL := cur.DropBlocklist - prev.DropBlocklist
+				dDropAB := cur.DropAutoblock - prev.DropAutoblock
+
+				log.Printf("pps=%d syn/s=%d dropBL/s=%d dropAB/s=%d autoblocks=%d",
+					dTotal, dSyn, dDropBL, dDropAB, cur.AutoblockActions)
+
+				prev = cur
+			}
 		}
 	}()
 

@@ -10,7 +10,7 @@
 /*
     STATS
     ~ counters are incremented in the kernel and are pulled
-      from the user space.
+      in the user space.
 */
 
 struct stats

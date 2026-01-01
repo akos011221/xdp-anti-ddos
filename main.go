@@ -19,22 +19,18 @@ import (
 const (
 	BPF_OBJECT_FILE_PATH string = "./xdp_anti_ddos.bpf.o"
 	PROGRAM_NAME         string = "xdp_anti_ddos"
-	BLOCKED_MAP_NAME     string = "blocked_ipv4"
 	EVENTS_MAP_NAME      string = "events"
 	STATS_MAP_NAME       string = "stats_map"
-
-	REASON_BLOCKLIST    string = "blocklist"
-	REASON_RATE_LIMITED string = "rate_limited"
 )
 
 type Stats struct {
-	PktsTotal        uint64
-	PktsIPv4         uint64
-	PktsTCP          uint64
-	PktsSYN          uint64
-	DropBlocklist    uint64
-	DropAutoblock    uint64
-	AutoblockActions uint64
+	PktsTotal         uint64
+	PktsIPv4          uint64
+	PktsTCP           uint64
+	PktsSYN           uint64
+	DroppedQuarantine uint64
+	DroppedRate       uint64
+	QuarantineActions uint64
 }
 
 func ipToU32(ip net.IP) (uint32, error) {
@@ -80,11 +76,6 @@ func main() {
 		log.Fatalf("program %s not found", PROGRAM_NAME)
 	}
 
-	blockedMap := coll.Maps[BLOCKED_MAP_NAME]
-	if blockedMap == nil {
-		log.Fatalf("map %s not found", BLOCKED_MAP_NAME)
-	}
-
 	eventsMap := coll.Maps[EVENTS_MAP_NAME]
 	if eventsMap == nil {
 		log.Fatalf("map %s not found", EVENTS_MAP_NAME)
@@ -117,22 +108,6 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	go func() {
-		time.Sleep(5 * time.Second)
-		ip := net.ParseIP("88.88.88.88")
-		u, err := ipToU32(ip)
-		if err != nil {
-			log.Printf("bad ip: %v", err)
-			return
-		}
-		val := uint8(1)
-		if err := blockedMap.Put(u, val); err != nil {
-			log.Printf("blockedMap.Put: %v", err)
-			return
-		}
-		log.Printf("blocked %s", ip.String())
-	}()
-
 	// Event loop
 	go func() {
 		for {
@@ -151,28 +126,16 @@ func main() {
 				log.Printf("bad event size: %d", len(raw))
 				continue
 			}
+
 			ts := binary.LittleEndian.Uint64(raw[0:8])
-			srcIPHost := binary.LittleEndian.Uint32(raw[8:12])
-			dstPort := binary.LittleEndian.Uint16(raw[12:14])
-			reasonCode := raw[14]
-			flags := raw[15]
+			srcHost := binary.LittleEndian.Uint32(raw[8:12])
+			ttl := binary.LittleEndian.Uint32(raw[12:16])
 
 			ipBytes := make([]byte, 4)
-			binary.BigEndian.PutUint32(ipBytes, srcIPHost)
+			binary.BigEndian.PutUint32(ipBytes, srcHost)
 			srcIP := net.IP(ipBytes)
 
-			var reason string
-			switch reasonCode {
-			case 1:
-				reason = REASON_BLOCKLIST
-			case 3:
-				reason = REASON_RATE_LIMITED
-			default:
-				reason = "unknown"
-			}
-
-			log.Printf("DROP src=%s dstPort=%d reason=%s flags=0x%x ts=%d",
-				srcIP.String(), dstPort, reason, flags, ts)
+			log.Printf("[QUARANTINE] src=%s ttl=%ds ts=%d", srcIP.String(), ttl, ts)
 		}
 	}()
 
@@ -202,19 +165,18 @@ func main() {
 					cur.PktsIPv4 += s.PktsIPv4
 					cur.PktsTCP += s.PktsTCP
 					cur.PktsSYN += s.PktsSYN
-					cur.DropBlocklist += s.DropBlocklist
-					cur.DropAutoblock += s.DropAutoblock
-					cur.AutoblockActions += s.AutoblockActions
+					cur.DroppedQuarantine += s.DroppedQuarantine
+					cur.DroppedRate += s.DroppedRate
+					cur.QuarantineActions += s.QuarantineActions
 				}
 
 				// Compute deltas per second
-				dTotal := cur.PktsTotal - prev.PktsTotal
-				dSyn := cur.PktsSYN - prev.PktsSYN
-				dDropBL := cur.DropBlocklist - prev.DropBlocklist
-				dDropAB := cur.DropAutoblock - prev.DropAutoblock
-
-				log.Printf("pps=%d syn/s=%d dropBL/s=%d dropAB/s=%d autoblocks=%d",
-					dTotal, dSyn, dDropBL, dDropAB, cur.AutoblockActions)
+				log.Printf("pps=%d syn/s=%d dropQ/s=%d quarantine_actions=%d",
+					cur.PktsTotal-prev.PktsTotal,
+					cur.PktsSYN-prev.PktsSYN,
+					cur.DroppedQuarantine-prev.DroppedQuarantine,
+					cur.QuarantineActions,
+				)
 
 				prev = cur
 			}
